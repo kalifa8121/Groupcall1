@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import io from 'socket.io-client';
 import './App.css';
 
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || "https://one0-bank-1z4r.onrender.com";
+const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || "https://imaanaacall2.onrender.com";
 let socket;
 
 function App() {
@@ -21,9 +21,11 @@ function App() {
       const peerConnection = createPeerConnection(userId, socket);
       peersRef.current[userId] = peerConnection;
 
-      localStreamRef.current.getTracks().forEach(track => {
-        peerConnection.addTrack(track, localStreamRef.current);
-      });
+      if (localStreamRef.current) {
+        localStreamRef.current.getTracks().forEach(track => {
+          peerConnection.addTrack(track, localStreamRef.current);
+        });
+      }
 
       const offer = await peerConnection.createOffer();
       await peerConnection.setLocalDescription(offer);
@@ -34,9 +36,11 @@ function App() {
       const peerConnection = createPeerConnection(sender, socket);
       peersRef.current[sender] = peerConnection;
 
-      localStreamRef.current.getTracks().forEach(track => {
-        peerConnection.addTrack(track, localStreamRef.current);
-      });
+      if (localStreamRef.current) {
+        localStreamRef.current.getTracks().forEach(track => {
+          peerConnection.addTrack(track, localStreamRef.current);
+        });
+      }
 
       await peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
       const answer = await peerConnection.createAnswer();
@@ -77,7 +81,10 @@ function App() {
 
   const createPeerConnection = (userId, socketInstance) => {
     const pc = new RTCPeerConnection({
-      iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+      iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:stun1.l.google.com:19302' }
+      ]
     });
 
     pc.onicecandidate = (event) => {
@@ -93,67 +100,83 @@ function App() {
     return pc;
   };
 
- const joinRoom = async (e) => {
+  const startCall = async (e) => {
     e.preventDefault();
     if (!roomCode) return;
 
     try {
-      // Jalqaba kaameeraa fi maayikiroofoonii gaafadhu
       const stream = await navigator.mediaDevices.getUserMedia({ 
         video: { facingMode: "user" }, 
         audio: true 
       });
       
       localStreamRef.current = stream;
-      
-      // Viidiyoon calqabaa (Self) kallattiin akka qabatu godhi
       if (myVideoRef.current) {
         myVideoRef.current.srcObject = stream;
-        myVideoRef.current.play().catch(err => console.log("Play error:", err));
+        myVideoRef.current.play().catch(err => console.log(err));
       }
-
-      await fetch(`${BACKEND_URL}/api/room`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ roomCode })
-      });
 
       socket.emit('join-room', roomCode);
       setInRoom(true);
     } catch (err) {
-      console.error("Camera access error:", err);
-      alert("Kaameeraa ykn maayikiroofoonii argachuu hin danda'amne. Heeyyama mirkaneessi!");
+      alert("Kaameeraa ykn maayikiroofoonii argachuu hin danda'amne.");
     }
   };
+
+  const endCall = () => {
+    if (localStreamRef.current) {
+      localStreamRef.current.getTracks().forEach(track => track.stop());
+    }
+    Object.values(peersRef.current).forEach(pc => pc.close());
+    peersRef.current = {};
+    setStreams({});
+    setInRoom(false);
+    window.location.reload();
+  };
+
   return (
-    <div className="container">
-      <h1>Aappii Sagalee fi Viidiyoo (Dhuunfaa & Garee)</h1>
+    <div className="container" style={{ textAlign: 'center', padding: '20px' }}>
+      <h1>Aappii Sagalee fi Viidiyoo (Call & WebRTC)</h1>
       {!inRoom ? (
-        <form onSubmit={joinRoom} className="join-form">
+        <form onSubmit={startCall} className="join-form">
           <input 
             type="text" 
             placeholder="Koodii Kutaa Galchi (Fkn: room123)" 
             value={roomCode}
             onChange={(e) => setRoomCode(e.target.value)}
+            style={{ padding: '10px', fontSize: '16px', marginRight: '10px' }}
           />
-          <button type="submit">Kutaa Seenii</button>
+          <button type="submit" style={{ padding: '10px 20px', background: 'green', color: 'white', border: 'none', cursor: 'pointer' }}>
+            Call (Seeni)
+          </button>
         </form>
       ) : (
-        <div className="video-grid">
-          <div className="video-box">
-            <video ref={myVideoRef} autoPlay muted playsInline />
-            <span>Ani (Self)</span>
-          </div>
-          {Object.entries(streams).map(([userId, stream]) => (
-            <div className="video-box" key={userId}>
-              <video 
-                autoPlay 
-                playsInline 
-                ref={el => { if (el) el.srcObject = stream; }} 
-              />
-              <span>Hirmaataa</span>
+        <div>
+          <div className="video-grid" style={{ display: 'flex', justifyContent: 'center', gap: '20px', flexWrap: 'wrap', marginBottom: '20px' }}>
+            <div className="video-box">
+              <video ref={myVideoRef} autoPlay muted playsInline style={{ width: '300px', background: '#000', borderRadius: '8px' }} />
+              <p>Ani (Self)</p>
             </div>
-          ))}
+            {Object.entries(streams).map(([userId, stream]) => (
+              <div className="video-box" key={userId}>
+                <video 
+                  autoPlay 
+                  playsInline 
+                  ref={el => { 
+                    if (el && el.srcObject !== stream) {
+                      el.srcObject = stream;
+                      el.play().catch(e => console.log(e));
+                    }
+                  }} 
+                  style={{ width: '300px', background: '#000', borderRadius: '8px' }}
+                />
+                <p>Hirmaataa</p>
+              </div>
+            ))}
+          </div>
+          <button onClick={endCall} style={{ padding: '12px 25px', background: 'red', color: 'white', border: 'none', borderRadius: '5px', fontSize: '16px', cursor: 'pointer' }}>
+            End Call (Cufi)
+          </button>
         </div>
       )}
     </div>
