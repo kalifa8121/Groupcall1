@@ -8,8 +8,16 @@ let socket;
 function App() {
   const [roomCode, setRoomCode] = useState('');
   const [inRoom, setInRoom] = useState(false);
+  const [callType, setCallType] = useState('video'); // 'video' ykn 'audio'
   const [streams, setStreams] = useState({});
+  const [messages, setMessages] = useState([]);
+  const [textInput, setTextInput] = useState('');
   
+  // Recording states
+  const [isRecording, setIsRecording] = useState(false);
+  const mediaRecorderRef = useRef(null);
+  const audioChunksRef = useRef([]);
+
   const myVideoRef = useRef();
   const peersRef = useRef({});
   const localStreamRef = useRef();
@@ -50,16 +58,16 @@ function App() {
 
     socket.on('answer', async ({ answer, sender }) => {
       const pc = peersRef.current[sender];
-      if (pc) {
-        await pc.setRemoteDescription(new RTCSessionDescription(answer));
-      }
+      if (pc) await pc.setRemoteDescription(new RTCSessionDescription(answer));
     });
 
     socket.on('ice-candidate', async ({ candidate, sender }) => {
       const pc = peersRef.current[sender];
-      if (pc && candidate) {
-        await pc.addIceCandidate(new RTCIceCandidate(candidate));
-      }
+      if (pc && candidate) await pc.addIceCandidate(new RTCIceCandidate(candidate));
+    });
+
+    socket.on('receive-message', (data) => {
+      setMessages(prev => [...prev, data]);
     });
 
     socket.on('user-disconnected', (userId) => {
@@ -100,21 +108,28 @@ function App() {
     return pc;
   };
 
-  const startCall = async (e) => {
-    e.preventDefault();
+  const startCall = async (type) => {
     if (!roomCode) return;
+    setCallType(type);
 
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ 
-        video: { facingMode: "user" }, 
-        audio: true 
-      });
-      
+      const constraints = type === 'video' 
+        ? { video: { facingMode: "user" }, audio: true }
+        : { video: false, audio: true };
+
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
       localStreamRef.current = stream;
-      if (myVideoRef.current) {
+
+      if (type === 'video' && myVideoRef.current) {
         myVideoRef.current.srcObject = stream;
-        myVideoRef.current.play().catch(err => console.log(err));
+        myVideoRef.current.play().catch(e => console.log(e));
       }
+
+      await fetch(`${BACKEND_URL}/api/room`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ roomCode })
+      });
 
       socket.emit('join-room', roomCode);
       setInRoom(true);
@@ -134,11 +149,55 @@ function App() {
     window.location.reload();
   };
 
+  // Text Message Erguu
+  const sendTextMessage = (e) => {
+    e.preventDefault();
+    if (!textInput.trim()) return;
+    const msgData = { type: 'text', content: textInput, sender: socket.id };
+    socket.emit('send-message', { roomCode, messageData: msgData });
+    setMessages(prev => [...prev, msgData]);
+    setTextInput('');
+  };
+
+  // Sagalee Waraabuu (Voice Recording) Jalqabuu fi Xumuruu
+  const startRecording = async () => {
+    audioChunksRef.current = [];
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mediaRecorder = new MediaRecorder(stream);
+      mediaRecorderRef.current = mediaRecorder;
+
+      mediaRecorder.ondataavailable = (event) => {
+        if (event.data.size > 0) audioChunksRef.current.push(event.data);
+      };
+
+      mediaRecorder.onstop = () => {
+        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+        const audioUrl = URL.createObjectURL(audioBlob);
+        const msgData = { type: 'audio', content: audioUrl, sender: socket.id };
+        socket.emit('send-message', { roomCode, messageData: msgData });
+        setMessages(prev => [...prev, msgData]);
+      };
+
+      mediaRecorder.start();
+      setIsRecording(true);
+    } catch (err) {
+      alert("Waraabbii sagalee jalqabuu hin danda'amne.");
+    }
+  };
+
+  const stopRecording = () => {
+    if (mediaRecorderRef.current) {
+      mediaRecorderRef.current.stop();
+      setIsRecording(false);
+    }
+  };
+
   return (
     <div className="container" style={{ textAlign: 'center', padding: '20px' }}>
-      <h1>Aappii Sagalee fi Viidiyoo (Call & WebRTC)</h1>
+      <h1>Aappii Sagalee, Viidiyoo & Chat</h1>
       {!inRoom ? (
-        <form onSubmit={startCall} className="join-form">
+        <div className="join-form">
           <input 
             type="text" 
             placeholder="Koodii Kutaa Galchi (Fkn: room123)" 
@@ -146,37 +205,89 @@ function App() {
             onChange={(e) => setRoomCode(e.target.value)}
             style={{ padding: '10px', fontSize: '16px', marginRight: '10px' }}
           />
-          <button type="submit" style={{ padding: '10px 20px', background: 'green', color: 'white', border: 'none', cursor: 'pointer' }}>
-            Call (Seeni)
+          <br/><br/>
+          <button onClick={() => startCall('video')} style={{ padding: '10px 20px', background: 'green', color: 'white', border: 'none', marginRight: '10px', cursor: 'pointer' }}>
+            Video Call Seenii
           </button>
-        </form>
+          <button onClick={() => startCall('audio')} style={{ padding: '10px 20px', background: 'blue', color: 'white', border: 'none', cursor: 'pointer' }}>
+            Voice Call Seenii
+          </button>
+        </div>
       ) : (
-        <div>
-          <div className="video-grid" style={{ display: 'flex', justifyContent: 'center', gap: '20px', flexWrap: 'wrap', marginBottom: '20px' }}>
-            <div className="video-box">
-              <video ref={myVideoRef} autoPlay muted playsInline style={{ width: '300px', background: '#000', borderRadius: '8px' }} />
-              <p>Ani (Self)</p>
-            </div>
-            {Object.entries(streams).map(([userId, stream]) => (
-              <div className="video-box" key={userId}>
-                <video 
-                  autoPlay 
-                  playsInline 
-                  ref={el => { 
-                    if (el && el.srcObject !== stream) {
-                      el.srcObject = stream;
-                      el.play().catch(e => console.log(e));
-                    }
-                  }} 
-                  style={{ width: '300px', background: '#000', borderRadius: '8px' }}
-                />
-                <p>Hirmaataa</p>
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+          {callType === 'video' && (
+            <div className="video-grid" style={{ display: 'flex', justifyContent: 'center', gap: '20px', flexWrap: 'wrap', marginBottom: '20px' }}>
+              <div className="video-box">
+                <video ref={myVideoRef} autoPlay muted playsInline style={{ width: '250px', background: '#000', borderRadius: '8px' }} />
+                <p>Ani (Self)</p>
               </div>
-            ))}
-          </div>
-          <button onClick={endCall} style={{ padding: '12px 25px', background: 'red', color: 'white', border: 'none', borderRadius: '5px', fontSize: '16px', cursor: 'pointer' }}>
+              {Object.entries(streams).map(([userId, stream]) => (
+                <div className="video-box" key={userId}>
+                  <video 
+                    autoPlay 
+                    playsInline 
+                    ref={el => { 
+                      if (el && el.srcObject !== stream) {
+                        el.srcObject = stream;
+                        el.play().catch(e => console.log(e));
+                      }
+                    }} 
+                    style={{ width: '250px', background: '#000', borderRadius: '8px' }}
+                  />
+                  <p>Hirmaataa</p>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {callType === 'audio' && (
+            <h3>Voice Call irra jirtu... (Sagalee qofa)</h3>
+          )}
+
+          <button onClick={endCall} style={{ padding: '10px 20px', background: 'red', color: 'white', border: 'none', borderRadius: '5px', marginBottom: '20px', cursor: 'pointer' }}>
             End Call (Cufi)
           </button>
+
+          {/* Chat & Voice Messaging Section */}
+          <div className="chat-section" style={{ width: '100%', maxWidth: '400px', border: '1px solid #ccc', padding: '10px', borderRadius: '8px', background: '#f9f9f9' }}>
+            <h3>Chat & Media Room</h3>
+            <div style={{ height: '150px', overflowY: 'scroll', border: '1px solid #ddd', padding: '5px', marginBottom: '10px', background: '#fff', textAlign: 'left' }}>
+              {messages.map((msg, index) => (
+                <div key={index} style={{ margin: '5px 0' }}>
+                  {msg.type === 'text' && <p><b>{msg.sender === socket.id ? 'Ani' : 'Hirmaataa'}:</b> {msg.content}</p>}
+                  {msg.type === 'audio' && (
+                    <div>
+                      <p><b>{msg.sender === socket.id ? 'Ani' : 'Hirmaataa'} (Voice Note):</b></p>
+                      <audio controls src={msg.content} style={{ width: '100%' }} />
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+
+            <form onSubmit={sendTextMessage} style={{ display: 'flex', gap: '5px', marginBottom: '5px' }}>
+              <input 
+                type="text" 
+                value={textInput} 
+                onChange={e => setTextInput(e.target.value)} 
+                placeholder="Ergaa barreessi..." 
+                style={{ flex: 1, padding: '8px' }}
+              />
+              <button type="submit" style={{ padding: '8px 12px' }}>Ergi</button>
+            </form>
+
+            <div>
+              {!isRecording ? (
+                <button type="button" onClick={startRecording} style={{ background: 'purple', color: 'white', border: 'none', padding: '8px', width: '100%', cursor: 'pointer' }}>
+                  🎙️ Sagalee Waraabuu Jalqabi
+                </button>
+              ) : (
+                <button type="button" onClick={stopRecording} style={{ background: 'darkred', color: 'white', border: 'none', padding: '8px', width: '100%', cursor: 'pointer' }}>
+                  ⏹️ Waraabbii Xumuri & Ergi
+                </button>
+              )}
+            </div>
+          </div>
         </div>
       )}
     </div>
