@@ -16,7 +16,7 @@ const io = new Server(server, {
 });
 
 app.get('/', (req, res) => {
-  res.send('Video Call Server is running successfully! 🚀');
+  res.send('Video & Audio Call Server is running successfully! 🚀');
 });
 
 io.on('connection', (socket) => {
@@ -25,8 +25,6 @@ io.on('connection', (socket) => {
   socket.on('join-room', (roomCode) => {
     socket.join(roomCode);
     console.log(`User ${socket.id} joined room: ${roomCode}`);
-    
-    // Namoota biroo kutaa kana keessa jiran beeksisi
     socket.to(roomCode).emit('user-connected', socket.id);
   });
 
@@ -40,6 +38,11 @@ io.on('connection', (socket) => {
 
   socket.on('ice-candidate', ({ target, candidate }) => {
     io.to(target).emit('ice-candidate', { candidate, sender: socket.id });
+  });
+
+  // Chat fi Message (Text, Voice, Video blob) wal-dabarsuu
+  socket.on('send-message', ({ roomCode, messageData }) => {
+    socket.to(roomCode).emit('receive-message', messageData);
   });
 
   socket.on('disconnect', () => {
